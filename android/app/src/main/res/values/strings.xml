@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Калории</string>
+    <string name="title_activity_main">Калории</string>
+    <string name="package_name">com.infinite1st.calorietracker</string>
+    <string name="custom_url_scheme">com.infinite1st.calorietracker</string>
+</resources>

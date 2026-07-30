@@ -9,32 +9,27 @@ const MORNING_COFFEE = { name: "Кофе", grams: "", kcal100: "", kcal: 100, id
 function dateKey(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-
 function parseDateKey(key) {
   const [y, m, d] = key.split("-").map(Number);
   return new Date(y, m - 1, d);
 }
-
 function addDays(d, n) {
   const x = new Date(d);
   x.setDate(x.getDate() + n);
   return x;
 }
-
 function startOfDay(d) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
   return x;
 }
-
 function startOfWeek(d) {
   const day = d.getDay();
   const diff = (day === 0 ? -6 : 1) - day;
   return addDays(startOfDay(d), diff);
 }
-
 function formatDate(d) {
-  return `${String(d.getDate()).padStart(2, "0")}.${MONTHS[d.getMonth()]}`;
+  return `${String(d.getDate()).padStart(2, "0")} ${MONTHS[d.getMonth()]}`;
 }
 
 function buildCycleWeeks(anchorDate) {
@@ -94,7 +89,6 @@ function CalorieTracker() {
   const todayKey = dateKey(today);
 
   const [dayData, setDayData] = useState(() => storage.get("day-data") || {});
-  const [weekLimits, setWeekLimits] = useState(() => storage.get("week-limits") || {});
   const [burnedByDay, setBurnedByDay] = useState(() => storage.get("burned-by-day") || {});
   const [anchorKey, setAnchorKey] = useState(() => {
     const stored = storage.get("anchor-date");
@@ -108,8 +102,6 @@ function CalorieTracker() {
   const [kcal100, setKcal100] = useState("");
   const [editingLimit, setEditingLimit] = useState(false);
   const [limitDraft, setLimitDraft] = useState("");
-  const [editingWeekLimit, setEditingWeekLimit] = useState(false);
-  const [weekLimitDraft, setWeekLimitDraft] = useState("");
   const [saveError, setSaveError] = useState(false);
 
   const anchorDate = parseDateKey(anchorKey);
@@ -135,10 +127,8 @@ function CalorieTracker() {
     const confirmed = window.confirm("Сбросить все данные и начать отсчёт заново с сегодняшнего дня? Это действие нельзя отменить.");
     if (!confirmed) return;
     setDayData({});
-    setWeekLimits({});
     setBurnedByDay({});
     storage.set("day-data", {});
-    storage.set("week-limits", {});
     storage.set("burned-by-day", {});
     storage.set("anchor-date", todayKey);
     setAnchorKey(todayKey);
@@ -151,11 +141,6 @@ function CalorieTracker() {
   const persist = useCallback((next) => {
     const ok = storage.set("day-data", next);
     setSaveError(!ok);
-  }, []);
-
-  const persistWeekLimits = useCallback((next) => {
-    const ok = storage.set("week-limits", next);
-    if (!ok) setSaveError(true);
   }, []);
 
   const persistBurnedByDay = useCallback((next) => {
@@ -207,7 +192,6 @@ function CalorieTracker() {
     setLimitDraft(String(selectedDay.limit));
     setEditingLimit(true);
   };
-
   const saveLimit = () => {
     const val = parseInt(limitDraft, 10);
     if (!isNaN(val) && val > 0) updateDay(selectedDayKey, (day) => ({ ...day, limit: val }));
@@ -215,33 +199,14 @@ function CalorieTracker() {
   };
 
   const selectedWeek = cycleWeeks[selectedWeekIndex];
-  const selectedWeekKey = dateKey(selectedWeek.days[0]);
   const isViewingActiveWeek = selectedWeekIndex === displayActiveIndex;
 
-  const defaultWeekLimit = selectedWeek.days.reduce((sum, d) => sum + getDay(dateKey(d)).limit, 0);
-  const weekLimit = weekLimits[selectedWeekKey] != null ? weekLimits[selectedWeekKey] : defaultWeekLimit;
+  const weekLimit = selectedWeek.days.reduce((sum, d) => sum + getDay(dateKey(d)).limit, 0);
 
   let weekEaten = 0;
   selectedWeek.days.forEach((d) => {
     if (d <= today) weekEaten += getDay(dateKey(d)).entries.reduce((s, e) => s + e.kcal, 0);
   });
-
-  const startEditWeekLimit = () => {
-    setWeekLimitDraft(String(weekLimit));
-    setEditingWeekLimit(true);
-  };
-
-  const saveWeekLimit = () => {
-    const val = parseInt(weekLimitDraft, 10);
-    if (!isNaN(val) && val > 0) {
-      setWeekLimits((prev) => {
-        const next = { ...prev, [selectedWeekKey]: val };
-        persistWeekLimits(next);
-        return next;
-      });
-    }
-    setEditingWeekLimit(false);
-  };
 
   const selectedDayEaten = selectedDay.entries.reduce((s, e) => s + e.kcal, 0);
   const selectedDayRemaining = selectedDay.limit - selectedDayEaten;
@@ -250,15 +215,13 @@ function CalorieTracker() {
 
   const monthWeeks = cycleWeeks.map((w, i) => {
     const weekKey = dateKey(w.days[0]);
-    const fullWeekDefaultLimit = w.days.reduce((sum, d) => sum + getDay(dateKey(d)).limit, 0);
-    const limit = weekLimits[weekKey] != null ? weekLimits[weekKey] : fullWeekDefaultLimit;
+    const limit = w.days.reduce((sum, d) => sum + getDay(dateKey(d)).limit, 0);
     let eaten = 0;
     w.days.forEach((d) => {
       if (d <= today) eaten += getDay(dateKey(d)).entries.reduce((s, e) => s + e.kcal, 0);
     });
-    const isActive = cycleActive && i === activeIndex;
     const isPast = !cycleActive || i < activeIndex;
-    return { weekNumber: i + 1, limit, eaten, days: w.days, weekKey, isActive, isPast };
+    return { weekNumber: i + 1, limit, eaten, days: w.days, weekKey, isPast };
   });
 
   const monthLimit = monthWeeks.reduce((s, w) => s + w.limit, 0);
@@ -308,6 +271,7 @@ function CalorieTracker() {
       !cycleActive && React.createElement("p", { style: { fontSize: 12, color: "#a8a29e", marginBottom: 20 } }, "Цикл из 4 недель завершён. Нажмите на значок сброса, чтобы начать новый."),
       cycleActive && React.createElement("div", { style: { marginBottom: 28 } }),
 
+      // Day card
       React.createElement("div", { style: { ...cardStyle, marginBottom: 16 } },
         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } },
           React.createElement("span", { style: labelStyle },
@@ -320,17 +284,17 @@ function CalorieTracker() {
             React.createElement("div", { className: "tabular", style: { fontSize: 24, fontWeight: 700, color: selectedDayRemaining < 0 ? "#f43f5e" : "#059669" } }, selectedDayRemaining),
             React.createElement("div", { style: smallMuted }, "остаток")
           ),
-          React.createElement("div", null,
+          React.createElement("div", { style: { textAlign: "center" } },
             React.createElement("div", { className: "tabular", style: { fontSize: 24, fontWeight: 700 } }, selectedDayEaten),
             React.createElement("div", { style: smallMuted }, "съедено")
           ),
-          React.createElement("div", null,
+          React.createElement("div", { style: { textAlign: "right" } },
             !editingLimit
-              ? React.createElement("button", { onClick: startEditLimit, style: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 0, color: "inherit" } },
+              ? React.createElement("button", { onClick: startEditLimit, style: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4, background: "none", border: "none", padding: 0, color: "inherit", width: "100%" } },
                   React.createElement("span", { className: "tabular", style: { fontSize: 24, fontWeight: 700 } }, selectedDay.limit),
                   React.createElement(IconPencil, { className: "" })
                 )
-              : React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+              : React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 } },
                   React.createElement("input", {
                     type: "number", autoFocus: true, value: limitDraft,
                     onChange: (e) => setLimitDraft(e.target.value),
@@ -342,11 +306,32 @@ function CalorieTracker() {
             React.createElement("div", { style: smallMuted }, "лимит")
           )
         ),
-        React.createElement("div", { style: { marginTop: 12, height: 6, background: "#f5f5f4", borderRadius: 999, overflow: "hidden" } },
+        React.createElement("div", { style: { marginTop: 12, height: 6, background: "#f5f5f4", borderRadius: 999, overflow: "hidden", marginBottom: 12 } },
           React.createElement("div", { style: { height: "100%", borderRadius: 999, width: `${Math.min(100, (selectedDayEaten / selectedDay.limit) * 100)}%`, background: selectedDayEaten > selectedDay.limit ? "#fb7185" : "#10b981", transition: "width 0.2s" } })
+        ),
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between" } },
+          selectedWeek.days.map((d, i) => {
+            const key = dateKey(d);
+            const isSelected = key === selectedDayKey;
+            const isFuture = d > today;
+            const dd = getDay(key);
+            const eaten = dd.entries.reduce((s, e) => s + e.kcal, 0);
+            const over = eaten > dd.limit && dd.entries.length > 0;
+            const dotColor = isFuture ? "#f5f5f4" : over ? "#fb7185" : dd.entries.length > 0 ? "#10b981" : "#e7e5e4";
+            return React.createElement("button", {
+              key: i,
+              onClick: () => !isFuture && setSelectedDayKey(key),
+              disabled: isFuture,
+              style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 4, background: "none", border: "none", padding: 4, cursor: isFuture ? "default" : "pointer" }
+            },
+              React.createElement("span", { style: { fontSize: 10, fontWeight: isSelected ? 700 : 400, color: isSelected ? "#1c1917" : "#a8a29e" } }, DAY_NAMES_SHORT[d.getDay()]),
+              React.createElement("div", { style: { width: 8, height: 8, borderRadius: "50%", background: dotColor, boxShadow: isSelected ? "0 0 0 2px #a7f3d0" : "none" } })
+            );
+          })
         )
       ),
 
+      // Add entry
       React.createElement("div", { style: { ...cardStyle, marginBottom: 16 } },
         React.createElement("span", { style: { ...labelStyle, marginBottom: 12, display: "block" } }, "Добавить"),
         React.createElement("input", {
@@ -380,6 +365,7 @@ function CalorieTracker() {
         }, React.createElement(IconPlus), " Добавить")
       ),
 
+      // Entries
       selectedDay.entries.length > 0 && React.createElement("div", { style: { ...cardStyle, marginBottom: 16 } },
         React.createElement("span", { style: { ...labelStyle, marginBottom: 12, display: "block" } }, "Записи"),
         React.createElement("ul", { style: { listStyle: "none", margin: 0, padding: 0 } },
@@ -398,6 +384,7 @@ function CalorieTracker() {
         )
       ),
 
+      // Week card
       React.createElement("div", { style: cardStyle },
         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } },
           React.createElement("span", { style: labelStyle }, `Неделя ${selectedWeekIndex + 1}`),
@@ -411,70 +398,17 @@ function CalorieTracker() {
             React.createElement("div", { className: "tabular", style: { fontSize: 20, fontWeight: 700, color: weekRemaining < 0 ? "#f43f5e" : "#059669" } }, weekRemaining),
             React.createElement("div", { style: smallMuted }, "остаток")
           ),
-          React.createElement("div", null,
+          React.createElement("div", { style: { textAlign: "center" } },
             React.createElement("div", { className: "tabular", style: { fontSize: 20, fontWeight: 700 } }, weekEaten),
             React.createElement("div", { style: smallMuted }, "съедено")
           ),
-          React.createElement("div", null,
-            !editingWeekLimit
-              ? React.createElement("button", { onClick: startEditWeekLimit, style: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 0, color: "inherit" } },
-                  React.createElement("span", { className: "tabular", style: { fontSize: 20, fontWeight: 700 } }, weekLimit),
-                  React.createElement(IconPencil, { className: "" })
-                )
-              : React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
-                  React.createElement("input", {
-                    type: "number", autoFocus: true, value: weekLimitDraft,
-                    onChange: (e) => setWeekLimitDraft(e.target.value),
-                    onKeyDown: (e) => e.key === "Enter" && saveWeekLimit(),
-                    style: { width: 60, fontSize: 16, fontWeight: 700, border: "1px solid #d6d3d1", borderRadius: 6, padding: "2px 6px" }
-                  }),
-                  React.createElement("button", { onClick: saveWeekLimit, style: { background: "none", border: "none", color: "#059669" } }, React.createElement(IconCheck))
-                ),
+          React.createElement("div", { style: { textAlign: "right" } },
+            React.createElement("div", { className: "tabular", style: { fontSize: 20, fontWeight: 700 } }, weekLimit),
             React.createElement("div", { style: smallMuted }, "лимит")
           )
         ),
         React.createElement("div", { style: { height: 6, background: "#f5f5f4", borderRadius: 999, overflow: "hidden", marginBottom: 12 } },
           React.createElement("div", { style: { height: "100%", borderRadius: 999, width: `${weekProgress}%`, background: weekEaten > weekLimit ? "#fb7185" : "#10b981", transition: "width 0.2s" } })
-        ),
-        React.createElement("div", { style: { display: "flex", justifyContent: "space-between" } },
-          selectedWeek.days.map((d, i) => {
-            const key = dateKey(d);
-            const isSelected = key === selectedDayKey;
-            const isFuture = d > today;
-            const dd = getDay(key);
-            const eaten = dd.entries.reduce((s, e) => s + e.kcal, 0);
-            const over = eaten > dd.limit && dd.entries.length > 0;
-            const dotColor = isFuture ? "#f5f5f4" : over ? "#fb7185" : dd.entries.length > 0 ? "#10b981" : "#e7e5e4";
-            return React.createElement("button", {
-              key: i,
-              onClick: () => !isFuture && setSelectedDayKey(key),
-              disabled: isFuture,
-              style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 4, background: "none", border: "none", padding: 4, cursor: isFuture ? "default" : "pointer" }
-            },
-              React.createElement("span", { style: { fontSize: 10, fontWeight: isSelected ? 700 : 400, color: isSelected ? "#1c1917" : "#a8a29e" } }, DAY_NAMES_SHORT[d.getDay()]),
-              React.createElement("div", { style: { width: 8, height: 8, borderRadius: "50%", background: dotColor, boxShadow: isSelected ? "0 0 0 2px #a7f3d0" : "none" } })
-            );
-          })
-        )
-      ),
-
-      React.createElement("div", { style: { ...cardStyle, marginTop: 16 } },
-        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } },
-          React.createElement("span", { style: labelStyle }, "Месяц"),
-          React.createElement("span", { style: { fontSize: 11, color: "#a8a29e" } }, `${monthProgress}%`)
-        ),
-        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginBottom: 12 } },
-          React.createElement("div", null,
-            React.createElement("div", { className: "tabular", style: { fontSize: 20, fontWeight: 700, color: monthRemaining < 0 ? "#f43f5e" : "#059669" } }, monthRemaining),
-            React.createElement("div", { style: smallMuted }, "остаток")
-          ),
-          React.createElement("div", null,
-            React.createElement("div", { className: "tabular", style: { fontSize: 20, fontWeight: 700 } }, monthEaten),
-            React.createElement("div", { style: smallMuted }, "съедено")
-          )
-        ),
-        React.createElement("div", { style: { height: 6, background: "#f5f5f4", borderRadius: 999, overflow: "hidden", marginBottom: 12 } },
-          React.createElement("div", { style: { height: "100%", borderRadius: 999, width: `${monthProgress}%`, background: monthEaten > monthLimit ? "#fb7185" : "#10b981", transition: "width 0.2s" } })
         ),
         React.createElement("div", { style: { display: "flex", justifyContent: "space-between" } },
           monthWeeks.map((w, i) => {
@@ -494,6 +428,32 @@ function CalorieTracker() {
         )
       ),
 
+      // Month card
+      React.createElement("div", { style: { ...cardStyle, marginTop: 16 } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } },
+          React.createElement("span", { style: labelStyle }, "Месяц"),
+          React.createElement("span", { style: { fontSize: 11, color: "#a8a29e" } }, `${monthProgress}%`)
+        ),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 12 } },
+          React.createElement("div", null,
+            React.createElement("div", { className: "tabular", style: { fontSize: 20, fontWeight: 700, color: monthRemaining < 0 ? "#f43f5e" : "#059669" } }, monthRemaining),
+            React.createElement("div", { style: smallMuted }, "остаток")
+          ),
+          React.createElement("div", { style: { textAlign: "center" } },
+            React.createElement("div", { className: "tabular", style: { fontSize: 20, fontWeight: 700 } }, monthEaten),
+            React.createElement("div", { style: smallMuted }, "съедено")
+          ),
+          React.createElement("div", { style: { textAlign: "right" } },
+            React.createElement("div", { className: "tabular", style: { fontSize: 20, fontWeight: 700 } }, monthLimit),
+            React.createElement("div", { style: smallMuted }, "лимит")
+          )
+        ),
+        React.createElement("div", { style: { height: 6, background: "#f5f5f4", borderRadius: 999, overflow: "hidden", marginBottom: 12 } },
+          React.createElement("div", { style: { height: "100%", borderRadius: 999, width: `${monthProgress}%`, background: monthEaten > monthLimit ? "#fb7185" : "#10b981", transition: "width 0.2s" } })
+        )
+      ),
+
+      // Burned calories card
       React.createElement("div", { style: { ...cardStyle, marginTop: 16 } },
         React.createElement("span", { style: { ...labelStyle, marginBottom: 16, display: "block" } }, "Потрачено калорий"),
 

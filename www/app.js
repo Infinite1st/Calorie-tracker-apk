@@ -413,14 +413,16 @@ function CalorieTracker() {
         React.createElement("div", { style: { display: "flex", justifyContent: "space-between" } },
           monthWeeks.map((w, i) => {
             const over = w.eaten > w.limit && w.eaten > 0;
-            const dotColor = over ? "#fb7185" : w.eaten > 0 ? "#10b981" : "#e7e5e4";
+            const isFutureWeek = w.days[0] > today;
+            const dotColor = isFutureWeek ? "#f5f5f4" : over ? "#fb7185" : w.eaten > 0 ? "#10b981" : "#e7e5e4";
             const isSelectedWeek = i === selectedWeekIndex;
             return React.createElement("button", {
               key: w.weekNumber,
-              onClick: () => setSelectedWeekIndex(i),
-              style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 4, background: "none", border: "none", padding: 4, cursor: "pointer" }
+              onClick: () => !isFutureWeek && setSelectedWeekIndex(i),
+              disabled: isFutureWeek,
+              style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 4, background: "none", border: "none", padding: 4, cursor: isFutureWeek ? "default" : "pointer" }
             },
-              React.createElement("span", { style: { fontSize: 10, fontWeight: isSelectedWeek ? 700 : 400, color: isSelectedWeek ? "#1c1917" : "#a8a29e" } }, `Нед. ${w.weekNumber}`),
+              React.createElement("span", { style: { fontSize: 10, fontWeight: isSelectedWeek ? 700 : 400, color: isSelectedWeek ? "#1c1917" : isFutureWeek ? "#d6d3d1" : "#a8a29e" } }, `Нед. ${w.weekNumber}`),
               React.createElement("div", { style: { width: 8, height: 8, borderRadius: "50%", background: dotColor, boxShadow: isSelectedWeek ? "0 0 0 2px #a7f3d0" : "none" } }),
               React.createElement("span", { className: "tabular", style: { fontSize: 10, color: "#a8a29e", minHeight: 12 } }, w.isPast ? w.eaten : "")
             );

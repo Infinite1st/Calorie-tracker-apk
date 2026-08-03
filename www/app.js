@@ -477,18 +477,21 @@ function CalorieTracker() {
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 20, borderTop: "1px solid #f5f5f4", paddingTop: 16 } },
           [0, 1, 2, 3].map((w) => {
             const weekNetDiff = monthWeeks[w].eaten - weekBurnedSum(w);
+            const isFutureWeek = monthWeeks[w].days[0] > today;
             return React.createElement("button", {
               key: w,
-              onClick: () => setBurnedWeekIndex(w),
+              onClick: () => !isFutureWeek && setBurnedWeekIndex(w),
+              disabled: isFutureWeek,
               style: {
                 display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", borderRadius: 8,
                 background: burnedWeekIndex === w ? "#ecfdf5" : "transparent",
-                border: burnedWeekIndex === w ? "1px solid #a7f3d0" : "1px solid transparent"
+                border: burnedWeekIndex === w ? "1px solid #a7f3d0" : "1px solid transparent",
+                cursor: isFutureWeek ? "default" : "pointer"
               }
             },
-              React.createElement("span", { style: { fontSize: 12, fontWeight: 600, color: "#78716c" } }, `Неделя ${w + 1}`),
-              React.createElement("span", { className: "tabular", style: { fontSize: 14, fontWeight: 700, marginTop: 4, color: weekNetDiff <= 0 ? "#059669" : "#f43f5e" } },
-                `${weekNetDiff > 0 ? "+" : ""}${weekNetDiff}`
+              React.createElement("span", { style: { fontSize: 12, fontWeight: 600, color: isFutureWeek ? "#d6d3d1" : "#78716c" } }, `Неделя ${w + 1}`),
+              React.createElement("span", { className: "tabular", style: { fontSize: 14, fontWeight: 700, marginTop: 4, color: isFutureWeek ? "#d6d3d1" : weekNetDiff <= 0 ? "#059669" : "#f43f5e" } },
+                isFutureWeek ? "" : `${weekNetDiff > 0 ? "+" : ""}${weekNetDiff}`
               )
             );
           })

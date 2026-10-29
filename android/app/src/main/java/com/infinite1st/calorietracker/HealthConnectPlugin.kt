@@ -7,11 +7,11 @@ import android.os.Build
 import androidx.activity.result.ActivityResult
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
-import androidx.health.connect.client.aggregate.AggregateMetric
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
-import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
+import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
@@ -25,9 +25,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.time.Duration
+import java.time.Instant
 import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.Period
+import java.time.ZoneId
+import kotlin.reflect.KClass
 
 /**
  * Reads burned calories from Health Connect. Samsung Health syncs data from
@@ -38,6 +40,7 @@ class HealthConnectPlugin : Plugin() {
 
     companion object {
         private const val PROVIDER_PACKAGE = "com.google.android.apps.healthdata"
+        private const val SAMSUNG_HEALTH_PACKAGE = "com.sec.android.app.shealth"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -125,7 +128,51 @@ class HealthConnectPlugin : Plugin() {
         call.reject("Не удалось открыть Health Connect")
     }
 
-    /** Returns per-day burned kcal for [startDate, endDate] (YYYY-MM-DD, inclusive). */
+    /** Reads every page of records of [type] in [filter]. */
+    private suspend fun <T : Record> readAll(hc: HealthConnectClient, type: KClass<T>, filter: TimeRangeFilter): List<T> {
+        val records = mutableListOf<T>()
+        var pageToken: String? = null
+        do {
+            val response = hc.readRecords(ReadRecordsRequest(recordType = type, timeRangeFilter = filter, pageToken = pageToken))
+            records += response.records
+            pageToken = response.pageToken
+        } while (pageToken != null)
+        return records
+    }
+
+    /** Adds [kcal] of a record to day -> app -> kcal, splitting records that cross midnight. */
+    private fun addByDay(
+        out: MutableMap<LocalDate, MutableMap<String, Double>>,
+        app: String, start: Instant, end: Instant, kcal: Double, zone: ZoneId
+    ) {
+        val totalMs = Duration.between(start, end).toMillis()
+        if (totalMs <= 0) {
+            out.getOrPut(start.atZone(zone).toLocalDate()) { mutableMapOf() }.merge(app, kcal) { a, b -> a + b }
+            return
+        }
+        var cursor = start
+        while (cursor.isBefore(end)) {
+            val day = cursor.atZone(zone).toLocalDate()
+            val nextDay = day.plusDays(1).atStartOfDay(zone).toInstant()
+            val segmentEnd = if (nextDay.isBefore(end)) nextDay else end
+            val part = kcal * Duration.between(cursor, segmentEnd).toMillis() / totalMs
+            out.getOrPut(day) { mutableMapOf() }.merge(app, part) { a, b -> a + b }
+            cursor = segmentEnd
+        }
+    }
+
+    /** Samsung Health wins; otherwise the app with the most data, so overlapping sources are not double counted. */
+    private fun pickSource(byApp: Map<String, Double>?): Pair<String, Double>? {
+        if (byApp.isNullOrEmpty()) return null
+        byApp[SAMSUNG_HEALTH_PACKAGE]?.let { return SAMSUNG_HEALTH_PACKAGE to it }
+        return byApp.maxByOrNull { it.value }?.toPair()
+    }
+
+    /**
+     * Returns per-day burned kcal for [startDate, endDate] (YYYY-MM-DD, inclusive).
+     * Raw records are summed instead of using Health Connect aggregates: the total-calories
+     * aggregate fills gaps with an estimated BMR, which would show numbers that never came from the watch.
+     */
     @PluginMethod
     fun getBurnedCalories(call: PluginCall) {
         val startDate = call.getString("startDate")
@@ -142,34 +189,52 @@ class HealthConnectPlugin : Plugin() {
             try {
                 val hc = client()
                 val granted = hc.permissionController.getGrantedPermissions()
-                val metrics = mutableSetOf<AggregateMetric<*>>()
-                if (readActive in granted) metrics += ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL
-                if (readTotal in granted) metrics += TotalCaloriesBurnedRecord.ENERGY_TOTAL
-                if (metrics.isEmpty()) {
+                if (readActive !in granted && readTotal !in granted) {
                     call.reject("Нет доступа к данным о калориях", "NO_PERMISSION")
                     return@launch
                 }
 
-                val start = LocalDate.parse(startDate).atStartOfDay()
-                val endOfRange = LocalDate.parse(endDate).plusDays(1).atStartOfDay()
-                val now = LocalDateTime.now()
-                val end = if (endOfRange.isAfter(now)) now else endOfRange
+                val zone = ZoneId.systemDefault()
+                val firstDay = LocalDate.parse(startDate)
+                val lastDay = LocalDate.parse(endDate)
+                val filter = TimeRangeFilter.between(
+                    firstDay.atStartOfDay(zone).toInstant(),
+                    lastDay.plusDays(1).atStartOfDay(zone).toInstant()
+                )
+
+                val active = mutableMapOf<LocalDate, MutableMap<String, Double>>()
+                val total = mutableMapOf<LocalDate, MutableMap<String, Double>>()
+                if (readActive in granted) {
+                    for (r in readAll(hc, ActiveCaloriesBurnedRecord::class, filter)) {
+                        addByDay(active, r.metadata.dataOrigin.packageName, r.startTime, r.endTime, r.energy.inKilocalories, zone)
+                    }
+                }
+                if (readTotal in granted) {
+                    for (r in readAll(hc, TotalCaloriesBurnedRecord::class, filter)) {
+                        addByDay(total, r.metadata.dataOrigin.packageName, r.startTime, r.endTime, r.energy.inKilocalories, zone)
+                    }
+                }
 
                 val days = JSArray()
-                if (start.isBefore(end)) {
-                    val groups = hc.aggregateGroupByPeriod(
-                        AggregateGroupByPeriodRequest(
-                            metrics = metrics,
-                            timeRangeFilter = TimeRangeFilter.between(start, end),
-                            timeRangeSlicer = Period.ofDays(1)
-                        )
-                    )
-                    for (group in groups) {
-                        val day = JSObject().put("date", group.startTime.toLocalDate().toString())
-                        group.result[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.let { day.put("active", it.inKilocalories) }
-                        group.result[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.let { day.put("total", it.inKilocalories) }
-                        days.put(day)
+                var day = firstDay
+                while (!day.isAfter(lastDay)) {
+                    val activeByApp = active[day]
+                    val totalByApp = total[day]
+                    if (activeByApp != null || totalByApp != null) {
+                        val item = JSObject().put("date", day.toString())
+                        pickSource(activeByApp)?.let { item.put("active", it.second).put("activeSource", it.first) }
+                        pickSource(totalByApp)?.let { item.put("total", it.second).put("totalSource", it.first) }
+                        val sources = JSArray()
+                        for (app in (activeByApp.orEmpty().keys + totalByApp.orEmpty().keys).toSortedSet()) {
+                            val source = JSObject().put("app", app)
+                            activeByApp?.get(app)?.let { source.put("active", it) }
+                            totalByApp?.get(app)?.let { source.put("total", it) }
+                            sources.put(source)
+                        }
+                        item.put("sources", sources)
+                        days.put(item)
                     }
+                    day = day.plusDays(1)
                 }
                 call.resolve(JSObject().put("days", days))
             } catch (e: Exception) {

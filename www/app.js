@@ -90,6 +90,11 @@ function healthConnect(method, options) {
   if (!HEALTH_SUPPORTED) return Promise.reject(new Error("Доступно только в Android-приложении"));
   return window.Capacitor.nativePromise("HealthConnect", method, options || {});
 }
+const HEALTH_APP_NAMES = {
+  "com.sec.android.app.shealth": "Samsung Health",
+  "com.google.android.apps.fitness": "Google Fit",
+  "com.google.android.apps.healthdata": "Health Connect",
+};
 function formatTime(ts) {
   const d = new Date(ts);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -146,6 +151,7 @@ function CalorieTracker() {
     setDayData({});
     setBurnedByDay({});
     setBurnedManual({});
+    storage.set("burned-synced", {});
     storage.set("day-data", {});
     storage.set("burned-by-day", {});
     storage.set("burned-manual", {});
@@ -282,20 +288,40 @@ function CalorieTracker() {
     try {
       const res = await healthConnect("getBurnedCalories", { startDate: syncStartKey, endDate: syncEndKey });
       const values = {};
+      const sources = {};
       (res.days || []).forEach((d) => {
         const v = d[healthSettings.metric];
         if (v != null && v > 0) values[d.date] = String(Math.round(v));
+        sources[d.date] = d.sources || [];
       });
+      // Older builds filled "total" days with Health Connect's BMR estimate; treat those as synced so they get cleared.
+      let synced = storage.get("burned-synced");
+      if (!synced) {
+        synced = {};
+        if (healthSettings.metric === "total") {
+          for (let d = parseDateKey(syncStartKey); dateKey(d) <= syncEndKey; d = addDays(d, 1)) synced[dateKey(d)] = true;
+        }
+      }
       setBurnedByDay((prev) => {
         const next = { ...prev };
-        Object.keys(values).forEach((k) => {
-          if (!burnedManualRef.current[k]) next[k] = values[k];
-        });
+        for (let d = parseDateKey(syncStartKey); dateKey(d) <= syncEndKey; d = addDays(d, 1)) {
+          const k = dateKey(d);
+          if (burnedManualRef.current[k]) continue;
+          if (values[k] !== undefined) {
+            next[k] = values[k];
+            synced[k] = true;
+          } else if (synced[k]) {
+            // The watch no longer reports anything for this day: drop the stale synced value.
+            delete next[k];
+            delete synced[k];
+          }
+        }
+        storage.set("burned-synced", synced);
         persistBurnedByDay(next);
         return next;
       });
       guard.last = Date.now();
-      setHealthState({ syncing: false, error: "", needsInstall: false, lastSync: guard.last });
+      setHealthState({ syncing: false, error: "", needsInstall: false, lastSync: guard.last, sources });
     } catch (e) {
       const noPermission = e && e.code === "NO_PERMISSION";
       setHealthState((s) => ({
@@ -607,6 +633,17 @@ function CalorieTracker() {
         HEALTH_SUPPORTED && healthState.error && React.createElement("div", { style: { fontSize: 12, color: "#f43f5e", marginBottom: 12 } },
           healthState.error,
           healthState.needsInstall && React.createElement("button", { onClick: openHealthConnect, style: { ...linkStyle, fontSize: 12, marginLeft: 6 } }, "Установить")
+        ),
+
+        HEALTH_SUPPORTED && healthSettings.connected && healthState.sources && React.createElement("div", { style: { fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.5 } },
+          React.createElement("div", { style: { color: "#a8a29e" } }, `Health Connect, ${formatDate(selectedDayDate)}:`),
+          (healthState.sources[selectedDayKey] || []).length === 0
+            ? React.createElement("div", null, "записей о калориях нет — проверьте, что Samsung Health передаёт калории в Health Connect")
+            : healthState.sources[selectedDayKey].map((src) =>
+                React.createElement("div", { key: src.app },
+                  `${HEALTH_APP_NAMES[src.app] || src.app} — активные ${src.active != null ? Math.round(src.active) : "нет"}, всего ${src.total != null ? Math.round(src.total) : "нет"}`
+                )
+              )
         ),
 
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, marginBottom: 16 } },

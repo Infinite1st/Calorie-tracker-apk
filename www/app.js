@@ -345,6 +345,13 @@ function CalorieTracker() {
     }
   };
 
+  // Ask for Health Connect access automatically on first launch, so burned calories fill in without setup.
+  useEffect(() => {
+    if (!HEALTH_SUPPORTED || healthSettings.connected || storage.get("health-prompted")) return;
+    storage.set("health-prompted", true);
+    connectHealth();
+  }, []);
+
   const disconnectHealth = () => {
     saveHealthSettings({ ...healthSettings, connected: false });
     setHealthState({ syncing: false, error: "", needsInstall: false, lastSync: null });

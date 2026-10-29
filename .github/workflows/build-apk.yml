@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'claude/samsung-health-integration-zxaki3' ]
   workflow_dispatch:
 
 jobs:

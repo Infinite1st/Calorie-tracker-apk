@@ -4,4 +4,5 @@
     <string name="title_activity_main">Калории</string>
     <string name="package_name">com.infinite1st.calorietracker</string>
     <string name="custom_url_scheme">com.infinite1st.calorietracker</string>
+    <string name="health_permissions_rationale">Приложение «Калории» читает из Health Connect только количество потраченных калорий (активных и общих), которые туда передаёт Samsung Health с ваших часов. Эти данные используются только для заполнения раздела «Потрачено калорий», хранятся на устройстве и никуда не передаются.</string>
 </resources>

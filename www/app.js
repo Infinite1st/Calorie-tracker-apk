@@ -1,4 +1,4 @@
-const { useState, useEffect, useCallback } = React;
+const { useState, useEffect, useCallback, useRef } = React;
 
 const DAY_NAMES = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"];
 const DAY_NAMES_SHORT = ["ВС", "ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ"];
@@ -84,12 +84,29 @@ const storage = {
   },
 };
 
+// Samsung Health passes watch data to Health Connect; the native HealthConnect plugin reads it.
+const HEALTH_SUPPORTED = !!(window.Capacitor && typeof window.Capacitor.nativePromise === "function" && window.androidBridge);
+function healthConnect(method, options) {
+  if (!HEALTH_SUPPORTED) return Promise.reject(new Error("Доступно только в Android-приложении"));
+  return window.Capacitor.nativePromise("HealthConnect", method, options || {});
+}
+function formatTime(ts) {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 function CalorieTracker() {
   const today = new Date();
   const todayKey = dateKey(today);
 
   const [dayData, setDayData] = useState(() => storage.get("day-data") || {});
   const [burnedByDay, setBurnedByDay] = useState(() => storage.get("burned-by-day") || {});
+  const [burnedManual, setBurnedManual] = useState(() => storage.get("burned-manual") || {});
+  const [healthSettings, setHealthSettings] = useState(() => storage.get("health-sync") || { connected: false, metric: "active" });
+  const [healthState, setHealthState] = useState({ syncing: false, error: "", needsInstall: false, lastSync: null });
+  const burnedManualRef = useRef(burnedManual);
+  burnedManualRef.current = burnedManual;
+  const healthSyncRef = useRef({ inFlight: false, last: 0 });
   const [anchorKey, setAnchorKey] = useState(() => {
     const stored = storage.get("anchor-date");
     if (stored) return stored;
@@ -128,8 +145,10 @@ function CalorieTracker() {
     if (!confirmed) return;
     setDayData({});
     setBurnedByDay({});
+    setBurnedManual({});
     storage.set("day-data", {});
     storage.set("burned-by-day", {});
+    storage.set("burned-manual", {});
     storage.set("anchor-date", todayKey);
     setAnchorKey(todayKey);
     setSaveError(false);
@@ -237,6 +256,102 @@ function CalorieTracker() {
       persistBurnedByDay(next);
       return next;
     });
+    // Manual input wins over watch data; clearing the field hands the day back to sync.
+    setBurnedManual((prev) => {
+      const next = { ...prev };
+      if (value === "") delete next[key];
+      else next[key] = true;
+      storage.set("burned-manual", next);
+      return next;
+    });
+  };
+
+  const syncStartKey = dateKey(cycleWeeks[0].days[0]);
+  const syncEndKey = cycleActive ? todayKey : dateKey(cycleWeeks[3].days[6]);
+
+  const saveHealthSettings = (next) => {
+    setHealthSettings(next);
+    storage.set("health-sync", next);
+  };
+
+  const syncHealth = useCallback(async (force) => {
+    const guard = healthSyncRef.current;
+    if (guard.inFlight || (!force && Date.now() - guard.last < 5000)) return;
+    guard.inFlight = true;
+    setHealthState((s) => ({ ...s, syncing: true, error: "" }));
+    try {
+      const res = await healthConnect("getBurnedCalories", { startDate: syncStartKey, endDate: syncEndKey });
+      const values = {};
+      (res.days || []).forEach((d) => {
+        const v = d[healthSettings.metric];
+        if (v != null && v > 0) values[d.date] = String(Math.round(v));
+      });
+      setBurnedByDay((prev) => {
+        const next = { ...prev };
+        Object.keys(values).forEach((k) => {
+          if (!burnedManualRef.current[k]) next[k] = values[k];
+        });
+        persistBurnedByDay(next);
+        return next;
+      });
+      guard.last = Date.now();
+      setHealthState({ syncing: false, error: "", needsInstall: false, lastSync: guard.last });
+    } catch (e) {
+      const noPermission = e && e.code === "NO_PERMISSION";
+      setHealthState((s) => ({
+        ...s, syncing: false,
+        error: noPermission ? "Нет доступа к калориям в Health Connect — подключите заново." : `Не удалось синхронизировать: ${(e && e.message) || "ошибка"}`,
+      }));
+      if (noPermission) saveHealthSettings({ ...healthSettings, connected: false });
+    } finally {
+      guard.inFlight = false;
+    }
+  }, [syncStartKey, syncEndKey, healthSettings, persistBurnedByDay]);
+
+  useEffect(() => {
+    if (!HEALTH_SUPPORTED || !healthSettings.connected) return;
+    syncHealth(true);
+    const onResume = () => {
+      if (document.visibilityState !== "hidden") syncHealth(false);
+    };
+    document.addEventListener("resume", onResume);
+    document.addEventListener("visibilitychange", onResume);
+    return () => {
+      document.removeEventListener("resume", onResume);
+      document.removeEventListener("visibilitychange", onResume);
+    };
+  }, [healthSettings.connected, syncHealth]);
+
+  const connectHealth = async () => {
+    setHealthState((s) => ({ ...s, error: "", needsInstall: false }));
+    try {
+      let st = await healthConnect("checkStatus");
+      if (st.status !== "available") {
+        setHealthState((s) => ({
+          ...s, needsInstall: true,
+          error: st.status === "update_required" ? "Нужно обновить Health Connect." : "Health Connect не установлен.",
+        }));
+        return;
+      }
+      if (!st.granted) st = await healthConnect("requestAuthorization");
+      if (!st.granted) {
+        setHealthState((s) => ({ ...s, error: "Доступ к калориям не выдан." }));
+        return;
+      }
+      const metric = st[healthSettings.metric] ? healthSettings.metric : st.active ? "active" : "total";
+      saveHealthSettings({ connected: true, metric });
+    } catch (e) {
+      setHealthState((s) => ({ ...s, error: `Не удалось подключиться: ${(e && e.message) || "ошибка"}` }));
+    }
+  };
+
+  const disconnectHealth = () => {
+    saveHealthSettings({ ...healthSettings, connected: false });
+    setHealthState({ syncing: false, error: "", needsInstall: false, lastSync: null });
+  };
+
+  const openHealthConnect = () => {
+    healthConnect("openHealthConnect").catch((e) => setHealthState((s) => ({ ...s, error: (e && e.message) || "Не удалось открыть Health Connect" })));
   };
   const burnedForDay = (key) => {
     const raw = getBurnedValue(key);
@@ -457,7 +572,35 @@ function CalorieTracker() {
 
       // Burned calories card
       React.createElement("div", { style: { ...cardStyle, marginTop: 16 } },
-        React.createElement("span", { style: { ...labelStyle, marginBottom: 16, display: "block" } }, "Потрачено калорий"),
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } },
+          React.createElement("span", { style: labelStyle }, "Потрачено калорий"),
+          HEALTH_SUPPORTED && (healthSettings.connected
+            ? React.createElement("button", { onClick: () => syncHealth(true), disabled: healthState.syncing, style: { ...linkStyle, color: "#a8a29e", fontWeight: 400 } },
+                healthState.syncing ? "Синхронизация…" : healthState.lastSync ? `Часы · ${formatTime(healthState.lastSync)} ⟳` : "Часы ⟳")
+            : React.createElement("button", { onClick: connectHealth, style: linkStyle }, "Подключить Samsung Health"))
+        ),
+
+        HEALTH_SUPPORTED && healthSettings.connected && React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 8 } },
+          React.createElement("div", { style: { display: "flex", border: "1px solid #e7e5e4", borderRadius: 8, overflow: "hidden" } },
+            [["active", "Активные"], ["total", "Всего"]].map(([value, label]) =>
+              React.createElement("button", {
+                key: value,
+                onClick: () => healthSettings.metric !== value && saveHealthSettings({ ...healthSettings, metric: value }),
+                style: {
+                  border: "none", padding: "6px 10px", fontSize: 12, fontWeight: 600,
+                  background: healthSettings.metric === value ? "#ecfdf5" : "transparent",
+                  color: healthSettings.metric === value ? "#059669" : "#a8a29e"
+                }
+              }, label)
+            )
+          ),
+          React.createElement("button", { onClick: disconnectHealth, style: { ...linkStyle, color: "#a8a29e", fontWeight: 400 } }, "Отключить")
+        ),
+
+        HEALTH_SUPPORTED && healthState.error && React.createElement("div", { style: { fontSize: 12, color: "#f43f5e", marginBottom: 12 } },
+          healthState.error,
+          healthState.needsInstall && React.createElement("button", { onClick: openHealthConnect, style: { ...linkStyle, fontSize: 12, marginLeft: 6 } }, "Установить")
+        ),
 
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, marginBottom: 16 } },
           cycleWeeks[burnedWeekIndex].days.map((d, i) => {
@@ -468,7 +611,10 @@ function CalorieTracker() {
                 type: "number", inputMode: "decimal", placeholder: String(DEFAULT_BURNED),
                 value: getBurnedValue(key),
                 onChange: (e) => setBurnedValue(key, e.target.value),
-                style: { width: "100%", textAlign: "center", border: "1px solid #e7e5e4", borderRadius: 8, padding: "8px 2px", fontSize: 12 }
+                style: {
+                  width: "100%", textAlign: "center", border: "1px solid #e7e5e4", borderRadius: 8, padding: "8px 0", fontSize: 12, minWidth: 0,
+                  color: healthSettings.connected && !burnedManual[key] && getBurnedValue(key) !== "" ? "#059669" : "#1c1917"
+                }
               })
             );
           })
@@ -495,6 +641,10 @@ function CalorieTracker() {
               )
             );
           })
+        ),
+
+        HEALTH_SUPPORTED && healthSettings.connected && React.createElement("p", { style: { fontSize: 11, color: "#a8a29e", margin: "-8px 0 16px" } },
+          "Зелёные значения пришли с часов. Введённое вручную не перезаписывается; очистите поле, чтобы вернуть данные с часов."
         ),
 
         React.createElement("div", { style: { textAlign: "center", borderTop: "1px solid #f5f5f4", paddingTop: 16 } },

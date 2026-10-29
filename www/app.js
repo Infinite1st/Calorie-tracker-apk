@@ -687,10 +687,6 @@ function CalorieTracker() {
           })
         ),
 
-        HEALTH_SUPPORTED && healthSettings.connected && React.createElement("p", { style: { fontSize: 11, color: "#a8a29e", margin: "-8px 0 16px" } },
-          "Зелёные значения пришли с часов. Введённое вручную не перезаписывается; очистите поле, чтобы вернуть данные с часов."
-        ),
-
         React.createElement("div", { style: { textAlign: "center", borderTop: "1px solid #f5f5f4", paddingTop: 16 } },
           React.createElement("div", { className: "tabular", style: { fontSize: 24, fontWeight: 700, color: netDiff <= 0 ? "#059669" : "#f43f5e" } },
             `${netDiff > 0 ? "+" : ""}${netDiff} ккал`
